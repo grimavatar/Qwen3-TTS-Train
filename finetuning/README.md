@@ -67,6 +67,8 @@ python sft_12hz.py \
   --speaker_name speaker_test
 ```
 
+> **Tip:** Add the `--use_8bit_adam` flag to enable the bitsandbytes 8-bit AdamW optimizer, which reduces VRAM usage.
+
 ### 3.2 Multi-Speaker Training
 
 Example:
