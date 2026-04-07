@@ -65,6 +65,7 @@ python prepare_data.py \
   --tokenizer_model_path Qwen/Qwen3-TTS-Tokenizer-12Hz \
   --input_jsonl train_raw.jsonl \
   --output_jsonl train_with_codes.jsonl
+  --batch_size 2
 ```
 
 ## 3. Training Quick Start
