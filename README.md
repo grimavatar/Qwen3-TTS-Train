@@ -1,4 +1,4 @@
-# Inspiration & Changes
+## Inspiration & Changes
 After following the discussion around "Finetuning Base results in progressively faster speech with every epoch" and running into my own limitations trying to finetune on Colab Free T4 with 15 GB VRAM, I decided to create a new repo with the following improvements:
 
 1. Uses the most solid codebase with all the key fixes and improvements:
@@ -15,11 +15,24 @@ After following the discussion around "Finetuning Base results in progressively 
 
 The goal was simple: make it actually usable on free Colab without hacks, crashes, or constant OOM errors.
 
+
+## Early thoughts
+
+1. Since quantized AdamW might have a small risk of slight degradation, I disabled it by default to stay as close as possible to the original training recipe. I recommend only enabling it if you actually run into Out of Memory (OOM) errors.
+
+> **Tip:** Add the `--use_8bit_adam` flag to enable it.
+
+2. For gradient checkpointing, I read that it can slow training down a bit. In practice I did not notice any meaningful slowdown, but the memory savings are huge. The important part is that it does not affect training quality, so for now I would simply leave it enabled.
+
+3. Even with the fast speech pace fix applied, the output was still as fast as the Base model when voice cloning. For me, increasing the learning rate from 2e-6 to 2e-5 finally fixed it. The model converged better and the pacing became much more natural.
+
+
 ## Guides
 1. For general Qwen TTS information, see the official Qwen3-TTS repository:  
    https://github.com/QwenLM/Qwen3-TTS
 2. For finetuning help specific to this setup, see the finetuning section:  
    https://github.com/grimavatar/Qwen3-TTS/tree/main/finetuning
+
 
 ## Acknowledgement
 Huge thanks to the original authors and contributors who made this possible.
