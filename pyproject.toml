@@ -23,6 +23,8 @@ dependencies = [
   "transformers==4.57.3",
   "accelerate==1.12.0",
   "gradio",
+  "numba<0.60",
+  "llvmlite<0.43",
   "librosa",
   "torchaudio",
   "soundfile",
@@ -33,6 +35,7 @@ dependencies = [
   "bitsandbytes",
   "tqdm",
   "safetensors",
+  "numpy==1.26.4",
 ]
 
 [project.urls]
