@@ -27,6 +27,24 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import AutoConfig
 
+import bitsandbytes as bnb
+
+
+def enable_gradient_checkpointing(model):
+    """Lower VRAM usage by disabling cache and enabling gradient checkpointing"""
+    if hasattr(model, "config") and hasattr(model.config, "use_cache"):
+        model.config.use_cache = False
+
+    if hasattr(model, "model"):
+        for _, module in model.model.named_modules():
+            if hasattr(module, "config") and hasattr(module.config, "use_cache"):
+                module.config.use_cache = False
+            if hasattr(module, "generation_config") and hasattr(module.generation_config, "use_cache"):
+                module.generation_config.use_cache = False
+    
+    model.model.gradient_checkpointing_enable()
+
+
 target_speaker_embedding = None
 target_speaker_embedding_sum = None
 target_speaker_embedding_count = 0
@@ -83,15 +101,18 @@ def train():
                              "Defaults to start_lang_id if not set.")
     args = parser.parse_args()
 
-    accelerator = Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard")
+    # Added the project_dir argument to specify the folder where the logs should be saved
+    accelerator = Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard", project_dir="./tensorboard_logs")
 
     MODEL_PATH = args.init_model_path
 
     qwen3tts = Qwen3TTSModel.from_pretrained(
         MODEL_PATH,
         torch_dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",
+        # attn_implementation="flash_attention_2",  # Unchecked to make it auto
     )
+    enable_gradient_checkpointing(qwen3tts)
+    
     config = AutoConfig.from_pretrained(MODEL_PATH)
 
     train_data = open(args.train_jsonl).readlines()
@@ -191,7 +212,9 @@ def train():
     dataset = TTSDataset(train_data, qwen3tts.processor, config, speaker_field=args.speaker_field, dialect_field=args.dialect_field, no_speaker=args.no_speaker)
     train_dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=dataset.collate_fn)
 
-    optimizer = AdamW(qwen3tts.model.parameters(), lr=args.lr, weight_decay=0.01)
+    # Changed to quantized AdamW for further lower VRAM usage
+    optimizer = bnb.optim.AdamW8bit(qwen3tts.model.parameters(), lr=args.lr, weight_decay=0.01)
+    # optimizer = AdamW(qwen3tts.model.parameters(), lr=args.lr, weight_decay=0.01)
 
     model, optimizer, train_dataloader = accelerator.prepare(
         qwen3tts.model, optimizer, train_dataloader
@@ -247,7 +270,11 @@ def train():
                 input_text_ids = input_ids[:, :, 0]
                 input_codec_ids = input_ids[:, :, 1]
 
-                input_text_embedding = model.talker.model.text_embedding(input_text_ids) * text_embedding_mask
+                # https://github.com/QwenLM/Qwen3-TTS/issues/179#issuecomment-4132512551
+                # <-------------------------------------------------------------------->
+                input_text_embedding = model.talker.text_projection(model.talker.get_text_embeddings()(input_text_ids)) * text_embedding_mask
+                # <-------------------------------------------------------------------->
+
                 input_codec_embedding = model.talker.model.codec_embedding(input_codec_ids) * codec_embedding_mask
                 if not args.no_speaker:
                     for i, language in enumerate(languages_batch):
@@ -300,19 +327,22 @@ def train():
                     codec_i_embedding = codec_i_embedding * codec_mask.unsqueeze(-1)
                     input_embeddings = input_embeddings + codec_i_embedding
 
-                # Use correct model call method (languages parameter not supported)
+
+                # https://github.com/QwenLM/Qwen3-TTS/issues/179#issuecomment-4108009116
+                # <-------------------------------------------------------------------->
                 outputs = model.talker(
-                    inputs_embeds=input_embeddings[:, :-1, :],
-                    attention_mask=attention_mask[:, :-1],
-                    labels=codec_0_labels[:, 1:],
+                    inputs_embeds=input_embeddings,
+                    attention_mask=attention_mask,
+                    labels=codec_0_labels,
                     output_hidden_states=True
                 )
 
                 hidden_states = outputs.hidden_states[0][-1]
-                talker_hidden_states = hidden_states[codec_mask[:, 1:]]
+                talker_hidden_states = hidden_states[:, :-1, :][codec_mask[:, 1:]]
                 talker_codec_ids = codec_ids[codec_mask]
 
-                sub_talker_logits, sub_talker_loss = model.talker.forward_sub_talker_finetune(talker_codec_ids, talker_hidden_states)
+                _, sub_talker_loss = model.talker.forward_sub_talker_finetune(talker_codec_ids, talker_hidden_states)
+                # <-------------------------------------------------------------------->
 
                 loss = outputs.loss + 0.3 * sub_talker_loss
 
