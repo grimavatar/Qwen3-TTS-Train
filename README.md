@@ -15,10 +15,11 @@ After following the discussion around "Finetuning Base results in progressively 
 
 The goal was simple: make it actually usable on free Colab without hacks, crashes, or constant OOM errors.
 
-# Guides:
-1. For normal Qwen TTS information, visit their [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) main repo.
-2. For finetuning help, check the [finetuning section](https://github.com/grimavatar/Qwen3-TTS/tree/main/finetuning)
+## Guides
+1. For general Qwen TTS information, see the official Qwen3-TTS repository:  
+   https://github.com/QwenLM/Qwen3-TTS
+2. For finetuning help specific to this setup, see the finetuning section:  
+   https://github.com/grimavatar/Qwen3-TTS/tree/main/finetuning
 
 ## Acknowledgement
-This repo is directly based on the following excellent project:
-- [**Qwen3-TTS**](https://github.com/QwenLM/Qwen3-TTS)
+Huge thanks to the original authors and contributors who made this possible.
