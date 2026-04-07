@@ -99,6 +99,10 @@ def train():
     parser.add_argument("--start_dialect_id", type=int, default=None,
                         help="Starting token ID for multi-dialect assignment. "
                              "Defaults to start_lang_id if not set.")
+    # optimizer params
+    parser.add_argument("--use_8bit_adam", action="store_true",
+                        help="Use bitsandbytes 8-bit AdamW optimizer to reduce VRAM usage.")
+    
     args = parser.parse_args()
 
     # Added the project_dir argument to specify the folder where the logs should be saved
@@ -111,6 +115,7 @@ def train():
         torch_dtype=torch.bfloat16,
         # attn_implementation="flash_attention_2",  # Unchecked to make it auto
     )
+    qwen3tts.model.to(torch.bfloat16)  # Force weights into bfloat16
     enable_gradient_checkpointing(qwen3tts)
     
     config = AutoConfig.from_pretrained(MODEL_PATH)
@@ -207,14 +212,15 @@ def train():
             languages = list(languages_set)
             print(f"Detected {len(languages)} languages: {languages}")
 
-    
     # Initialize dataset, pass speaker_field, dialect_field, and no_speaker parameters
     dataset = TTSDataset(train_data, qwen3tts.processor, config, speaker_field=args.speaker_field, dialect_field=args.dialect_field, no_speaker=args.no_speaker)
     train_dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=dataset.collate_fn)
 
-    # Changed to quantized AdamW for further lower VRAM usage
-    optimizer = bnb.optim.AdamW8bit(qwen3tts.model.parameters(), lr=args.lr, weight_decay=0.01)
-    # optimizer = AdamW(qwen3tts.model.parameters(), lr=args.lr, weight_decay=0.01)
+    if args.use_8bit_adam:
+        # Choose quantized AdamW for further lower VRAM usage
+        optimizer = bnb.optim.AdamW8bit(qwen3tts.model.parameters(), lr=args.lr, weight_decay=0.01)
+    else:
+        optimizer = AdamW(qwen3tts.model.parameters(), lr=args.lr, weight_decay=0.01)
 
     model, optimizer, train_dataloader = accelerator.prepare(
         qwen3tts.model, optimizer, train_dataloader
