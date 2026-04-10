@@ -27,12 +27,200 @@ The goal was simple: make it actually usable on free Colab without hacks, crashe
 3. Even with the fast speech pace fix applied, the output was still as fast as the Base model when voice cloning. For me, increasing the learning rate from 2e-6 to 2e-5 finally fixed it. The model converged better and the pacing became much more natural.
 
 
-## Guides
-1. For general Qwen TTS information, see the official Qwen3-TTS repository:  
-   https://github.com/QwenLM/Qwen3-TTS
-2. For finetuning help specific to this setup, see the finetuning section:  
-   https://github.com/grimavatar/Qwen3-TTS/tree/main/finetuning
+## Qwen3-TTS Quick Start Guide
 
+This guide provides a complete quick start walkthrough for Qwen3-TTS training, an all-in-one solution from data preparation to model training.
+
+## 1. Environment Setup
+
+### 1.1 Install Dependencies
+```bash
+git clone -q --single-branch --depth 1 https://github.com/grimavatar/Qwen3-TTS.git
+cd Qwen3-TTS/finetuning
+
+# Install required Python packages
+pip install -e .
+```
+
+### 1.2 Check Environment
+```bash
+# Check Python environment
+python --version
+
+# Check CUDA availability
+python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')"
+```
+
+## 2. Data Preparation Quick Start
+
+### 2.1 Input JSONL format
+
+Prepare your training file as a JSONL (one JSON object per line). Each line must contain:
+
+- `audio`: path to the target training audio (wav)
+- `text`: transcript corresponding to `audio`
+- `ref_audio`: path to the reference speaker audio (wav)
+- `speaker`: "spk1" (multi-speaker required)
+- `language`: "Chinese" (multi-language required)
+- `instruct`: "用特别愤怒的语气说" (instruct required)
+
+### 2.2 Data Preparation
+
+Convert `train_raw.jsonl` into a training JSONL that includes `audio_codes`:
+
+```bash
+# Prepare data
+python prepare_data.py \
+  --device cuda:0 \
+  --tokenizer_model_path Qwen/Qwen3-TTS-Tokenizer-12Hz \
+  --input_jsonl train_raw.jsonl \
+  --output_jsonl train_with_codes.jsonl \
+  --batch_size 2
+```
+
+## 3. Training Quick Start
+
+### 3.1 Single-Speaker Training
+
+```bash
+# Single-speaker training
+python sft_12hz.py \
+  --init_model_path Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+  --output_model_path output \
+  --train_jsonl train_with_codes.jsonl \
+  --batch_size 2 \
+  --lr 2e-6 \
+  --num_epochs 10 \
+  --speaker_name speaker_test
+```
+
+> **Tip:** Add the `--use_8bit_adam` flag to enable the bitsandbytes 8-bit AdamW optimizer, which reduces VRAM usage.
+
+### 3.2 Multi-Speaker Training
+
+Example:
+```jsonl
+{"audio":"./data/utt0001.wav","text":"其实我真的有发现，我是一个特别善于观察别人情绪的人。","ref_audio":"./data/utt0001.wav","speaker":"spk1"}
+{"audio":"./data/utt0002.wav","text":"他要大家仔细听听湖边群山送过来的回音。","ref_audio":"./data/utt0002.wav","speaker":"spk2"}
+```
+
+```bash
+# Multi-speaker training
+python sft_12hz.py \
+  --init_model_path Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+  --output_model_path multi_speaker_output \
+  --train_jsonl train_with_codes.jsonl \
+  --batch_size 2 \
+  --lr 2e-6 \
+  --num_epochs 10 \
+  --multi_speaker 
+```
+
+### 3.3 Multi-Language Training
+
+Example:
+```jsonl
+{"audio":"./data/utt0001.wav","text":"其实我真的有发现，我是一个特别善于观察别人情绪的人。","ref_audio":"./data/utt0001.wav","speaker":"spk1","language":"Chinese"}
+{"audio":"./data/utt0002.wav","text":"She said she would be here by noon.","ref_audio":"./data/utt0002.wav","speaker":"spk2","language":"English"}
+```
+
+```bash
+# Multi-language training
+python sft_12hz.py \
+  --init_model_path Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+  --output_model_path multi_language_output \
+  --train_jsonl train_with_codes.jsonl \
+  --batch_size 2 \
+  --lr 2e-6 \
+  --num_epochs 10 \
+  --multi_speaker \
+  --multi_language
+```
+
+### 3.3 Instruct Training
+
+Example:
+```jsonl
+{"audio":"./data/utt0001.wav","text":"其实我真的有发现，我是一个特别善于观察别人情绪的人。","ref_audio":"./data/utt0001.wav","instruct":"用特别愤怒的语气说"}
+```
+
+```bash
+# Instruct training
+python sft_12hz.py \
+  --init_model_path Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+  --output_model_path instruct_output \
+  --train_jsonl train_with_codes.jsonl \
+  --batch_size 2 \
+  --lr 2e-6 \
+  --num_epochs 10 \
+  --instruct_model
+```
+
+### 3.4 No Speaker and No Language Training
+
+Example:
+```jsonl
+{"audio":"./data/utt0001.wav","text":"其实我真的有发现，我是一个特别善于观察别人情绪的人。"}
+{"audio":"./data/utt0002.wav","text":"他要大家仔细听听湖边群山送过来的回音。"}
+```
+
+```bash
+python sft_12hz.py \
+  --init_model_path Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+  --output_model_path instruct_output \
+  --train_jsonl train_with_codes.jsonl \
+  --batch_size 2 \
+  --lr 2e-6 \
+  --num_epochs 10 \
+  --no_speaker
+```
+
+### 3.5 Continued Pre-Training
+
+Example:
+```jsonl
+{"audio":"./data/utt0001.wav","text":"其实我真的有发现，我是一个特别善于观察别人情绪的人。","ref_audio":"./data/spk1.wav","speaker":"spk1","language":"Chinese"}
+{"audio":"./data/utt0002.wav","text":"他要大家仔细听听湖边群山送过来的回音。","ref_audio":"./data/spk2.wav","speaker":"spk2","language":"Chinese"}
+```
+
+```bash
+accelerate launch pretrain_12hz.py \
+    --init_model_path Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+    --train_jsonl /path/to/large_scale_data.jsonl \
+    --output_model_path /path/to/output \
+    --batch_size 2 \
+    --lr 1e-4 \
+    --num_epochs 10 \
+    --warmup_steps 1000 \
+    --gradient_checkpointing \
+    --save_steps 5000
+```
+
+## 4. Best Practices Summary
+
+### 4.1 Data Preparation
+- ✅ Ensure audio quality (SNR > 20dB)
+- ✅ Audio duration of 2-10 seconds is recommended
+- ✅ At least 1 hour of data for single speaker
+- ✅ At least 30 minutes per speaker for multi-speaker
+
+### 4.2 Training Configuration
+- ✅ Single speaker: batch_size=2, lr=2e-6, epochs=3
+- ✅ Multi-speaker: enable --multi_speaker flag
+- ✅ Small dataset: increase epochs, reduce batch_size
+
+### 4.3 Performance Optimization
+- ✅ Use GPU for training
+- ✅ Enable mixed precision
+- ✅ Set batch_size appropriately
+- ✅ Use SSD storage for faster data loading
+
+**Happy training!** 🎉
+
+With this quick start guide, you should be able to quickly get started with the Qwen3-TTS training pipeline. If you have any questions, please refer to the detailed documentation or try adjusting parameters.
 
 ## Acknowledgement
+This repo is directly based on the following excellent project:
+- [**Qwen3-TTS**](https://github.com/QwenLM/Qwen3-TTS)
+
 Huge thanks to the original authors and contributors who made this possible.
