@@ -69,6 +69,7 @@ def train():
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--num_epochs", type=int, default=3)
+    parser.add_argument("--grad_accum_steps", type=int, default=4)
     parser.add_argument("--speaker_name", type=str, default="speaker_test")
     # multi speaker params 
     parser.add_argument("--multi_speaker", action="store_true", help="Enable multi-speaker training mode")
@@ -109,8 +110,10 @@ def train():
     
     args = parser.parse_args()
 
+    GRAD_ACCUM_STEPS = args.grad_accum_steps
+
     # Added the project_dir argument to specify the folder where the logs should be saved
-    accelerator = Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard", project_dir="./tensorboard_logs")
+    accelerator = Accelerator(gradient_accumulation_steps=GRAD_ACCUM_STEPS, mixed_precision="bf16", log_with="tensorboard", project_dir="./tensorboard_logs")
 
     MODEL_PATH = args.init_model_path
 
