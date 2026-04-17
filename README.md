@@ -5,6 +5,7 @@ After following the discussion around "Finetuning Base results in progressively 
 - Base from vspeech/Qwen3-TTS-Train.
 - Includes fix by sleepbro: https://github.com/QwenLM/Qwen3-TTS/issues/179#issuecomment-4108009116.
 - Includes fix by CamellIyquitous: https://github.com/QwenLM/Qwen3-TTS/issues/179#issuecomment-4132512551.
+- Includes fix by CamellIyquitous: https://github.com/vspeech/Qwen3-TTS-Train/issues/3#issuecomment-4159552850.
 - Fixed the error where the log folder was not specified.
 - Disabled forcing flash_attention_2 only, now it falls back to auto for better GPU compatibility.
 
