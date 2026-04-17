@@ -30,6 +30,9 @@ from transformers import AutoConfig
 import bitsandbytes as bnb
 
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
 def enable_gradient_checkpointing(model):
     """Lower VRAM usage by disabling cache and enabling gradient checkpointing"""
     if hasattr(model, "config") and hasattr(model.config, "use_cache"):
@@ -41,8 +44,9 @@ def enable_gradient_checkpointing(model):
                 module.config.use_cache = False
             if hasattr(module, "generation_config") and hasattr(module.generation_config, "use_cache"):
                 module.generation_config.use_cache = False
-    
-    model.model.gradient_checkpointing_enable()
+
+        if hasattr(model.model, "gradient_checkpointing_enable"):
+            model.model.gradient_checkpointing_enable()
 
 
 target_speaker_embedding = None
@@ -230,6 +234,8 @@ def train():
     model.train()
 
     for epoch in range(num_epochs):
+        total_epoch_loss = 0.0
+
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(model):
 
@@ -255,10 +261,10 @@ def train():
                         for i, speaker in enumerate(speakers_batch):
                             emb = speaker_embedding[i:i+1].detach()
                             if speaker not in speaker_embeddings_sum:
-                                speaker_embeddings_sum[speaker] = emb.clone()
+                                speaker_embeddings_sum[speaker] = emb.clone().float()
                                 speaker_embeddings_count[speaker] = 1
                             else:
-                                speaker_embeddings_sum[speaker] += emb
+                                speaker_embeddings_sum[speaker] += emb.float()
                                 speaker_embeddings_count[speaker] += 1
                             # Keep latest for compatibility (will use average when saving)
                             speaker_embeddings[speaker] = emb
@@ -266,10 +272,10 @@ def train():
                         # Single-speaker training: accumulate for averaging
                         emb = speaker_embedding.mean(dim=0, keepdim=True).detach()
                         if target_speaker_embedding_sum is None:
-                            target_speaker_embedding_sum = emb.clone()
+                            target_speaker_embedding_sum = emb.clone().float()
                             target_speaker_embedding_count = 1
                         else:
-                            target_speaker_embedding_sum += emb
+                            target_speaker_embedding_sum += emb.float()
                             target_speaker_embedding_count += 1
                         target_speaker_embedding = emb  # keep latest for compatibility
 
@@ -351,6 +357,8 @@ def train():
                 # <-------------------------------------------------------------------->
 
                 loss = outputs.loss + 0.3 * sub_talker_loss
+                loss_value = loss.item()
+                total_epoch_loss += loss_value
 
                 accelerator.backward(loss)
 
@@ -360,10 +368,13 @@ def train():
                 optimizer.step()
                 optimizer.zero_grad()
 
-            if step % 100 == 0:
-                accelerator.print(f"Epoch {epoch} | Step {step} | Loss: {loss.item():.4f}")
+            # if step % 100 == 0:
+            #     accelerator.print(f"Epoch {epoch} | Step {step} | Loss: {loss_value:.4f}")
 
         if accelerator.is_main_process:
+            avg_epoch_loss = total_epoch_loss / len(train_dataloader)
+            accelerator.print(f"Epoch {epoch} | Loss: {avg_epoch_loss:.4f}")
+
             output_dir = os.path.join(args.output_model_path, f"checkpoint-epoch-{epoch}")
             shutil.copytree(MODEL_PATH, output_dir, dirs_exist_ok=True)
 
