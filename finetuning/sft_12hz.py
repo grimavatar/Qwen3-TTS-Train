@@ -71,6 +71,8 @@ def train():
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--grad_accum_steps", type=int, default=4)
     parser.add_argument("--speaker_name", type=str, default="speaker_test")
+    parser.add_argument("--embed_reset_freq", type=int, default=0, 
+                        help="Reset speaker embedding accumulators every N epochs. Set to 0 to disable.")
     # multi speaker params 
     parser.add_argument("--multi_speaker", action="store_true", help="Enable multi-speaker training mode")
     parser.add_argument("--speaker_field", type=str, default="speaker", help="Field name for speaker in JSONL")
@@ -238,6 +240,14 @@ def train():
 
     for epoch in range(num_epochs):
         total_epoch_loss = 0.0
+
+        # Periodically reset speaker embedding accumulators every N epochs
+        # This prevents early-epoch (less trained) embeddings from skewing the final average
+        if epoch > 0 and args.embed_reset_freq > 0 and epoch % args.embed_reset_freq == 0:
+            target_speaker_embedding_sum = None
+            target_speaker_embedding_count = 0
+            speaker_embeddings_sum = {}
+            speaker_embeddings_count = {}
 
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(model):
