@@ -13,6 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+
 import argparse
 import json
 import os
@@ -49,18 +51,49 @@ def enable_gradient_checkpointing(model):
             model.model.gradient_checkpointing_enable()
 
 
+class EMA:
+    def __init__(self, n: int):
+        """
+        Initializes a new Exponential Moving Average (EMA) object.
+        :param n: Period of the moving average.
+        """
+        self.n = max(1, n)
+        self.k1 = 2.0 / (1.0 + self.n)
+        self.k2 = 1.0 - self.k1
+        self.sz = 0
+        self.ma = None
+
+    def update(self, v):
+        """
+        Updates the moving average with a new value.
+        :param v: The new value to update the moving average.
+        :return: The updated moving average.
+        """
+        if v is None: return self.ma
+        
+        if self.sz < self.n:
+            self.sz += 1
+            if self.ma is None:
+                self.ma = v.clone()
+            else:
+                # Iterative simple average (No buffer list needed!)
+                self.ma = self.ma + (v - self.ma) / self.sz
+        else:
+            # Exponential moving average
+            self.ma = v * self.k1 + self.ma * self.k2
+
+        return self.ma
+
+
 target_speaker_embedding = None
-target_speaker_embedding_sum = None
-target_speaker_embedding_count = 0
+target_speaker_embedding_ema = None
 speaker_embeddings = {}
-speaker_embeddings_sum = {}
-speaker_embeddings_count = {}
+speaker_embeddings_ema = {}
 
 
 def train():
     global target_speaker_embedding, speaker_embeddings
-    global target_speaker_embedding_sum, target_speaker_embedding_count
-    global speaker_embeddings_sum, speaker_embeddings_count
+    global target_speaker_embedding_ema, speaker_embeddings_ema
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--init_model_path", type=str, default="Qwen/Qwen3-TTS-12Hz-1.7B-Base")
@@ -71,9 +104,9 @@ def train():
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--grad_accum_steps", type=int, default=4)
     parser.add_argument("--speaker_name", type=str, default="speaker_test")
-    parser.add_argument("--embed_reset_freq", type=int, default=0, 
-                        help="Reset speaker embedding accumulators every N epochs. Set to 0 to disable.")
-    # multi speaker params 
+    parser.add_argument("--embed_ema_length", type=int, default=10, 
+                            help="Period (N) for the Exponential Moving Average of speaker embeddings")
+    # multi speaker params
     parser.add_argument("--multi_speaker", action="store_true", help="Enable multi-speaker training mode")
     parser.add_argument("--speaker_field", type=str, default="speaker", help="Field name for speaker in JSONL")
     parser.add_argument("--max_speakers", type=int, default=1000, help="Maximum number of supported speakers")
@@ -238,16 +271,11 @@ def train():
     num_epochs = args.num_epochs
     model.train()
 
+    # Calculate EMA length in steps (epochs * steps_per_epoch)
+    ema_length = args.embed_ema_length * len(train_dataloader)
+
     for epoch in range(num_epochs):
         total_epoch_loss = 0.0
-
-        # Periodically reset speaker embedding accumulators every N epochs
-        # This prevents early-epoch (less trained) embeddings from skewing the final average
-        if epoch > 0 and args.embed_reset_freq > 0 and epoch % args.embed_reset_freq == 0:
-            target_speaker_embedding_sum = None
-            target_speaker_embedding_count = 0
-            speaker_embeddings_sum = {}
-            speaker_embeddings_count = {}
 
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(model):
@@ -272,24 +300,18 @@ def train():
                     # Multi-speaker training: accumulate embeddings for averaging
                     if args.multi_speaker and speakers:
                         for i, speaker in enumerate(speakers_batch):
-                            emb = speaker_embedding[i:i+1].detach()
-                            if speaker not in speaker_embeddings_sum:
-                                speaker_embeddings_sum[speaker] = emb.clone().float()
-                                speaker_embeddings_count[speaker] = 1
-                            else:
-                                speaker_embeddings_sum[speaker] += emb.float()
-                                speaker_embeddings_count[speaker] += 1
+                            emb = speaker_embedding[i:i+1].detach().float()
+                            if speaker not in speaker_embeddings_ema:
+                                speaker_embeddings_ema[speaker] = EMA(n=ema_length)
+                            speaker_embeddings_ema[speaker].update(emb)
                             # Keep latest for compatibility (will use average when saving)
                             speaker_embeddings[speaker] = emb
                     else:
                         # Single-speaker training: accumulate for averaging
-                        emb = speaker_embedding.mean(dim=0, keepdim=True).detach()
-                        if target_speaker_embedding_sum is None:
-                            target_speaker_embedding_sum = emb.clone().float()
-                            target_speaker_embedding_count = 1
-                        else:
-                            target_speaker_embedding_sum += emb.float()
-                            target_speaker_embedding_count += 1
+                        emb = speaker_embedding.mean(dim=0, keepdim=True).detach().float()
+                        if target_speaker_embedding_ema is None:
+                            target_speaker_embedding_ema = EMA(n=ema_length)
+                        target_speaker_embedding_ema.update(emb)
                         target_speaker_embedding = emb  # keep latest for compatibility
 
                 input_text_ids = input_ids[:, :, 0]
@@ -385,8 +407,8 @@ def train():
             #     accelerator.print(f"Epoch {epoch} | Step {step} | Loss: {loss_value:.4f}")
 
         if accelerator.is_main_process:
-            avg_epoch_loss = total_epoch_loss / len(train_dataloader)
-            accelerator.print(f"Epoch {epoch} | Loss: {avg_epoch_loss:.4f}")
+            # avg_epoch_loss = total_epoch_loss / len(train_dataloader)
+            # accelerator.print(f"Epoch {epoch} | Loss: {avg_epoch_loss:.4f}")
 
             output_dir = os.path.join(args.output_model_path, f"checkpoint-epoch-{epoch}")
             shutil.copytree(MODEL_PATH, output_dir, dirs_exist_ok=True)
@@ -477,21 +499,25 @@ def train():
                 if args.multi_speaker and speakers:
                     for i, speaker in enumerate(speakers):
                         spk_id = args.start_spk_id + i
-                        if speaker in speaker_embeddings_sum:
-                            avg_emb = speaker_embeddings_sum[speaker] / speaker_embeddings_count[speaker]
+                        if speaker in speaker_embeddings_ema:
+                            avg_emb = speaker_embeddings_ema[speaker].ma
                             state_dict['talker.model.codec_embedding.weight'][spk_id] = avg_emb[0].to(weight.device).to(weight.dtype)
-                            accelerator.print(f"Speaker '{speaker}' (spk_id={spk_id}): saved average embedding from {speaker_embeddings_count[speaker]} samples")
+                            accelerator.print(f"Speaker '{speaker}' (spk_id={spk_id}): saved EMA embedding")
                 else:
                     # Single-speaker embedding storage: use average embedding
-                    if target_speaker_embedding_sum is not None and target_speaker_embedding_count > 0:
-                        avg_emb = target_speaker_embedding_sum / target_speaker_embedding_count
+                    if target_speaker_embedding_ema is not None:
+                        avg_emb = target_speaker_embedding_ema.ma
                         state_dict['talker.model.codec_embedding.weight'][args.start_spk_id] = avg_emb[0].to(weight.device).to(weight.dtype)
-                        accelerator.print(f"Single speaker (spk_id={args.start_spk_id}): saved average embedding from {target_speaker_embedding_count} batches")
+                        accelerator.print(f"Single speaker (spk_id={args.start_spk_id}): saved EMA embedding")
             else:
                 accelerator.print("No-speaker mode: skipping speaker embedding storage")
             
             save_path = os.path.join(output_dir, "model.safetensors")
             save_file(state_dict, save_path)
+
+            # moved here to know checkpoint is ready to be used or uploaded to HF
+            avg_epoch_loss = total_epoch_loss / len(train_dataloader)
+            accelerator.print(f"Epoch {epoch} | Loss: {avg_epoch_loss:.4f}")
 
 if __name__ == "__main__":
     train()
